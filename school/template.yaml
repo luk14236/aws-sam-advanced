@@ -1,0 +1,41 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  luk_data_etl
+
+  Sample SAM Template
+
+Parameters:
+  Stage:
+    Type: String
+    AllowedValues:
+      - dev
+      - prod
+    Description: The deployment stage for the application
+    Default: dev
+
+  Department:
+    Type: String
+    Description: The Department for the application
+
+Resources:
+  S3Bucket:
+      Type: 'AWS::S3::Bucket'
+      Properties:
+        BucketName: !Sub 'luk-${Department}-source-${Stage}'
+        Tags:
+          - 
+            Key: Name
+            Value: !Sub 'data-${Department}'
+        NotificationConfiguration:
+          EventBridgeConfiguration:
+            EventBridgeEnabled: true
+            
+  Teacher:
+    Type: AWS::Serverless::Application
+    Properties:
+      Location: ../glue-service/template.yaml
+      Parameters:
+        Stage: !Ref Stage
+        Department: !Ref Department
+        DataType: Teacher

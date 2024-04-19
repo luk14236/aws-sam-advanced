@@ -1,0 +1,143 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  luk_data_etl
+
+  Sample SAM Template for luk_data_etl
+
+Parameters:
+  Stage:
+    Type: String
+    AllowedValues:
+      - dev
+      - prod
+    Description: The deployment stage for the application
+    Default: dev
+
+Mappings:
+  VpcIdMap:
+    dev:
+      VpcId: vpc-1234
+    prod:
+      VpcId: vpc-5678
+  SubnetIdMap:
+    dev:
+      SubnetId: subnet-1234
+    prod:
+      SubnetId: subnet-4567
+
+Resources:
+  RedshiftSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId:
+        !FindInMap [ VpcIdMap, !Ref Stage, VpcId ]
+      GroupDescription: !Sub 'AWS SAM managed Redshift security group for data-${Stage}'
+      GroupName: !Sub 'sam-sg-rs-data-${Stage}'
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3389
+          ToPort: 3389
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+
+  RedshiftSecurityGroupIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref RedshiftSecurityGroup
+      IpProtocol: tcp
+      FromPort: 0
+      ToPort: 65535
+      SourceSecurityGroupId: !Ref RedshiftSecurityGroup
+
+  GlueRedshiftConnection:
+    Type: AWS::Glue::Connection
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      ConnectionInput:
+        ConnectionProperties:
+          Type: JDBC
+          JDBC_CONNECTION_URL: "{{resolve:secretsmanager:SECRET_LAMBDA:SecretString:REDSHIFT_JDBC_URL}}"
+          USERNAME: "{{resolve:secretsmanager:SECRET_LAMBDA:SecretString:REDSHIFT_USERNAME}}"
+          PASSWORD: "{{resolve:secretsmanager:SECRET_LAMBDA:SecretString:REDSHIFT_PASSWORD}}"
+        ConnectionType: JDBC
+        Name: luk-data-glue-red
+        PhysicalConnectionRequirements:
+          AvailabilityZone: eu-central-1a
+          SecurityGroupIdList:
+            - !Ref RedshiftSecurityGroup
+          SubnetId: !FindInMap [SubnetIdMap, !Ref Stage, SubnetId]
+
+  GlueJobRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: !Sub 'GlueServiceRole-${Stage}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: 'Allow'
+            Principal:
+              Service: glue.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole'
+        - 'arn:aws:iam::aws:policy/service-role/AmazonDMSRedshiftS3Role'
+        - 'arn:aws:iam::aws:policy/AmazonRedshiftAllCommandsFullAccess'
+        - 'arn:aws:iam::aws:policy/AmazonRedshiftDataFullAccess'
+        - 'arn:aws:iam::aws:policy/AmazonRedshiftFullAccess'
+        - 'arn:aws:iam::aws:policy/AmazonRedshiftQueryEditor'
+        - 'arn:aws:iam::aws:policy/AmazonS3FullAccess'
+        - 'arn:aws:iam::aws:policy/AWSGlueConsoleFullAccess'
+        - 'arn:aws:iam::aws:policy/AWSGlueSchemaRegistryFullAccess'
+
+  S3Bucket:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: !Sub 'luk-data-lake-${Stage}'
+
+  S3BucketReject:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: !Sub 'luk-data-rejected-${Stage}'
+
+  GlueS3Bucket:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: !Sub 'luk-glue-assets-${Stage}'
+
+  EventbridgeGlueRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: !Sub 'EventbridgeInvokeGlueRole-${Stage}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: 'Allow'
+            Principal:
+              Service: events.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: !Sub 'EventbridgeInvokeGluePolicy-${Stage}'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: 'Allow'
+                Action:
+                  - 'glue:notifyEvent'
+                Resource: '*'
+
+Outputs:
+  GlueRedshiftConnection:
+    Value: !Ref GlueRedshiftConnection
+    Export:
+      Name: GlueRedshiftConnection
+  GlueJobRole:
+    Value: !Ref GlueJobRole
+    Export:
+      Name: GlueJobRole
+  EventbridgeGlueRoleArn:
+    Value: !GetAtt EventbridgeGlueRole.Arn
+    Export:
+      Name: EventbridgeGlueRoleArn

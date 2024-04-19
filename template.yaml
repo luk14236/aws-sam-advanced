@@ -1,0 +1,31 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  complex_sam
+
+  Sample SAM Template for complex sam
+
+Parameters:
+  Stage:
+    Type: String
+    AllowedValues:
+      - dev
+      - prod
+    Description: The deployment stage for the application
+    Default: dev
+
+Resources:
+  Infra:
+    Type: AWS::Serverless::Application
+    Properties:
+      Location: infra/template.yaml
+      Parameters:
+        Stage: !Ref Stage
+  School:
+    Type: AWS::Serverless::Application
+    DependsOn: Infra
+    Properties:
+      Location: school/template.yaml
+      Parameters:
+        Stage: !Ref Stage
+        Department: school

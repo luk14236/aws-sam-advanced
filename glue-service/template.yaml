@@ -1,0 +1,111 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  luk_data_etl
+
+  Sample SAM Template for glue service
+
+Parameters:
+  Stage:
+    Type: String
+    AllowedValues:
+      - dev
+      - prod
+    Description: The deployment stage for the application
+    Default: dev
+
+  Department:
+    Type: String
+    Description: The Department for the glue service
+
+  DataType:
+    Type: String
+    Description: The data type for the glue service
+
+  ExecutionClass:
+    Type: String
+    AllowedValues:
+      - STANDARD
+      - FLEX
+    Description: The execution class for the glue job
+    Default: STANDARD
+
+Resources:
+  GlueJob:
+    Type: AWS::Glue::Job
+    Properties:
+      Command:
+        Name: glueetl
+        PythonVersion: 3
+        ScriptLocation: !Sub 's3://luk-glue-assets-${Stage}/scripts/${Department}-${DataType}.py'
+      Connections:
+        Connections:
+          - !ImportValue GlueRedshiftConnection
+      DefaultArguments:
+        "--enable-metrics": "false"
+        "--enable-spark-ui": "false"
+        "--spark-event-logs-path": !Sub "s3://luk-glue-assets-${Stage}/sparkHistoryLogs/"
+        "--enable-job-insights": "true"
+        "--enable-glue-datacatalog": "false"
+        "--enable-continuous-cloudwatch-log": "true"
+        "--job-bookmark-option": "job-bookmark-enable"
+        "--job-language": "python"
+        "--TempDir": !Sub "s3://luk-glue-assets-${Stage}/temporary/"
+        "--enable-auto-scaling": "true"
+        "--Stage": !Ref Stage
+      ExecutionClass: !Ref ExecutionClass
+      ExecutionProperty:
+        MaxConcurrentRuns: 5
+      GlueVersion: 4.0
+      MaxRetries: 0
+      Name: !Sub '${Department}-${DataType}'
+      NumberOfWorkers: 10
+      Role: !ImportValue GlueJobRole
+      Tags:
+        Name: !Sub 'data-${Department}'
+      WorkerType: G.1X
+
+  GlueWorkflow:
+    Type: AWS::Glue::Workflow
+    Properties:
+      MaxConcurrentRuns: 5
+      Name: !Sub '${Department}_${DataType}_wf'
+      Tags:
+        Name: !Sub 'data-${Department}'
+
+  GlueTrigger:
+    Type: AWS::Glue::Trigger
+    Properties:
+      Actions:
+        - JobName: !Ref GlueJob
+      EventBatchingCondition:
+        BatchSize: 1
+        BatchWindow: 900
+      Name: !Sub 's3_${DataType}_trigger'
+      Tags:
+        Name: !Sub 'data-${Department}'
+      Type: EVENT
+      WorkflowName: !Ref GlueWorkflow
+
+  GlueEventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      EventBusName: default
+      EventPattern:
+        source:
+          - aws.s3
+        detail-type:
+          - Object Created
+        detail:
+          bucket:
+            name: 
+              - !Sub 'luk-${Department}-source-${Stage}'
+          object:
+            key:
+              - prefix: !Sub '${DataType}/'
+      Name: !Sub '${DataType}_put_event'
+      State: ENABLED
+      Targets:
+        - Id: !Ref GlueWorkflow
+          Arn: !Sub 'arn:aws:glue:eu-central-1:${AWS::AccountId}:workflow/${Department}_${DataType}_wf'
+          RoleArn: !ImportValue EventbridgeGlueRoleArn
